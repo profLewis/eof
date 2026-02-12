@@ -237,25 +237,62 @@ updates when newer versions are found.
 Credentials are stored in `~/.eof/config.json` with restricted file permissions.
 Environment variables take priority over the config file.
 
-### CDSE
+### AWS Earth Search — No Auth Required
+
+[Element 84 Earth Search](https://earth-search.aws.element84.com/v1) provides Sentinel-2 L2A as Cloud Optimized GeoTIFFs. **No account or credentials needed** — just install and run.
+
+Note: Landsat on AWS is [requester-pays](https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html) and requires AWS credentials. For free Landsat, use Planetary Computer or Earthdata instead.
+
+### Planetary Computer
+
+[Planetary Computer](https://planetarycomputer.microsoft.com/) provides Sentinel-2, Landsat, and MODIS as COGs on Azure. Authentication is handled automatically by the `planetary-computer` package — no account needed.
 
 ```bash
-export CDSE_S3_ACCESS_KEY="your-key"
-export CDSE_S3_SECRET_KEY="your-secret"
+pip install planetary-computer
 ```
 
-Or save to config:
+### CDSE (Copernicus Data Space Ecosystem)
+
+CDSE provides free Sentinel-2 L2A data via STAC API and S3 storage. Requires credentials.
+
+**Method 1: S3 Access Keys (recommended)**
+
+1. Register for a free account at [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu)
+2. Go to the [S3 credentials dashboard](https://eodata.dataspace.copernicus.eu)
+3. Click "Generate S3 credentials" to create an access key and secret key
+4. Set them as environment variables:
+
+```bash
+export CDSE_S3_ACCESS_KEY="your-access-key"
+export CDSE_S3_SECRET_KEY="your-secret-key"
+```
+
+**Method 2: Username / Password**
+
+1. Register at [Copernicus Data Space Ecosystem](https://dataspace.copernicus.eu)
+2. Set your login credentials as environment variables:
+
+```bash
+export CDSE_USERNAME="your-email@example.com"
+export CDSE_PASSWORD="your-password"
+```
+
+You can also save credentials to the eof config file:
+
 ```python
 import eof
 config = eof.load_config()
-config['cdse']['s3_access_key'] = 'your-key'
-config['cdse']['s3_secret_key'] = 'your-secret'
+config['cdse']['s3_access_key'] = 'your-access-key'
+config['cdse']['s3_secret_key'] = 'your-secret-key'
 eof.save_config(config)
 ```
 
 ### NASA Earthdata
 
-Register at [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov/), then:
+[NASA Earthdata](https://www.earthdata.nasa.gov/) provides daily MODIS (MOD09GA), VIIRS (VNP09GA), and Landsat C2 L2. Requires a free Earthdata Login account.
+
+1. Register at [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov/)
+2. Set credentials using one of three methods:
 
 ```bash
 # Option 1: environment variables
@@ -278,17 +315,11 @@ eof.save_config(config)
 
 ### Google Earth Engine
 
-```bash
-earthengine authenticate
-```
+[Google Earth Engine](https://earthengine.google.com/) provides access to VIIRS and Sentinel-3 OLCI (GEE-only sensors), plus Sentinel-2, Landsat, and MODIS.
 
-### Planetary Computer
-
-```bash
-pip install planetary-computer
-```
-
-No further configuration needed -- URLs are signed automatically.
+1. Create a [Google Earth Engine](https://signup.earthengine.google.com/) account
+2. Run: `earthengine authenticate`
+3. Follow the URL in the terminal, sign in, and paste the verification code
 
 ## Caching
 
