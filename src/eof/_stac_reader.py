@@ -1,7 +1,8 @@
-"""Unified STAC-based Sentinel-2 reader.
+"""Unified STAC-based EO data reader.
 
 Replaces the three near-identical readers (CDSE, AWS, Planetary) with a
-single implementation parameterized by SourceConfig.
+single implementation parameterized by SourceConfig. Supports Sentinel-2
+(original API) and generic multi-sensor fetch via fetch_sensor().
 """
 
 import os
@@ -17,12 +18,15 @@ import shapely
 import mgrs
 import pystac_client
 
-from eof._types import S2Result
+from eof._types import S2Result, EOResult
 from eof._source_configs import SourceConfig
+from eof._sensor_configs import SensorConfig
+from eof._platform_bindings import SensorPlatformBinding
 from eof._geojson import load_geojson
 from eof._cache import get_cache_path, save_to_cache, load_from_cache
 from eof._scl import apply_scl_cloud_mask, dn_to_reflectance
 from eof._gdal_io import read_and_crop_band
+from eof._footprints import compute_all_footprints
 
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
@@ -161,9 +165,161 @@ class STACReader:
             crs=crs,
         )
 
+    def fetch_sensor(self, sensor_config: SensorConfig,
+                     binding: SensorPlatformBinding,
+                     start_date: str, end_date: str, geojson_path: str,
+                     data_folder: str = None,
+                     max_cloud_cover: int = 80) -> EOResult:
+        """
+        Fetch multi-sensor EO data via STAC API.
+
+        Args:
+            sensor_config: Sensor-specific configuration.
+            binding: Platform-specific binding for this sensor.
+            start_date: Start date 'YYYY-MM-DD'.
+            end_date: End date 'YYYY-MM-DD'.
+            geojson_path: Path to GeoJSON field boundary.
+            data_folder: Cache directory. None creates a temp dir.
+            max_cloud_cover: Max cloud cover percentage.
+
+        Returns:
+            EOResult with reflectance, footprints, etc.
+        """
+        cfg = self.config
+        sensor = sensor_config.name
+
+        # Configure GDAL
+        overrides = cfg.configure_gdal()
+        vsi_prefix = overrides.get("vsi_prefix", cfg.vsi_prefix)
+
+        # Set up data folder
+        if data_folder is None:
+            data_folder = tempfile.mkdtemp(prefix=f"{sensor}_")
+            print(f"Cache folder: {data_folder}")
+        os.makedirs(data_folder, exist_ok=True)
+
+        # Load geometry
+        geometry = load_geojson(geojson_path)
+        geojson_dict = json.loads(shapely.to_geojson(geometry))
+
+        # STAC search
+        items = self._search_collection(
+            binding.collection, geojson_dict, start_date, end_date,
+            max_cloud_cover,
+        )
+        print(f"STAC search ({cfg.name}/{sensor}): {len(items)} items found")
+
+        if not items:
+            raise RuntimeError(
+                f"No {sensor} items found on {cfg.name} for the given "
+                f"field and date range ({start_date} to {end_date})."
+            )
+
+        # Sort by datetime
+        items.sort(key=lambda x: x.datetime)
+
+        # Extract angles and DOYs
+        szas, vzas, raas, doys = [], [], [], []
+        for item in items:
+            sza, vza, raa = self._extract_angles(item)
+            szas.append(sza)
+            vzas.append(vza)
+            raas.append(raa)
+            doys.append(item.datetime.timetuple().tm_yday)
+
+        angles = np.array([szas, vzas, raas], dtype=np.float64)
+        doys = np.array(doys, dtype=np.int64)
+
+        # Cache status
+        n_cached = sum(
+            1 for item in items
+            if os.path.exists(get_cache_path(item.id, data_folder, sensor))
+        )
+        print(f"Cache: {n_cached}/{len(items)} items cached, "
+              f"{len(items) - n_cached} to download")
+
+        # Process items
+        band_pool_size = cfg.max_concurrent_reads + 4
+        process_fn = partial(
+            self._process_sensor_item,
+            sensor_config=sensor_config,
+            binding=binding,
+            geojson_cutline=geojson_path,
+            vsi_prefix=vsi_prefix,
+            data_folder=data_folder,
+        )
+
+        with ThreadPoolExecutor(max_workers=band_pool_size) as band_executor:
+            process_with_bands = partial(process_fn, band_executor=band_executor)
+            with ThreadPoolExecutor(max_workers=len(items)) as item_executor:
+                future_to_idx = {
+                    item_executor.submit(process_with_bands, item): i
+                    for i, item in enumerate(items)
+                }
+                results = [None] * len(items)
+                for future in tqdm(
+                    as_completed(future_to_idx),
+                    total=len(items),
+                    desc=f"Processing {sensor} items ({cfg.name})",
+                    unit="item",
+                ):
+                    idx = future_to_idx[future]
+                    results[idx] = future.result()
+
+        # Assemble output
+        reflectances = []
+        geotransform = None
+        crs = None
+        for refl, gt, proj in results:
+            reflectances.append(refl)
+            if geotransform is None:
+                geotransform = gt
+                crs = proj
+
+        refs = np.array(reflectances, dtype=np.float32)
+        uncs = sensor_config.uncertainty_fn(refs)
+        mask = np.all(np.isnan(refs), axis=(0, 1))
+
+        # Compute footprint ID maps
+        shape_hw = refs.shape[2:]
+        footprints = compute_all_footprints(
+            geotransform, shape_hw, sensor_config.resolution_groups,
+            sensor_config.target_resolution,
+        )
+
+        return EOResult(
+            reflectance=refs,
+            uncertainty=uncs,
+            angles=angles,
+            doys=doys,
+            mask=mask,
+            geotransform=geotransform,
+            crs=crs,
+            sensor=sensor,
+            band_names=sensor_config.band_names,
+            native_resolutions=sensor_config.resolution_groups,
+            footprints=footprints,
+        )
+
     # -------------------------------------------------------------------
     # Internal methods
     # -------------------------------------------------------------------
+
+    def _search_collection(self, collection: str, geojson_geometry: dict,
+                           start_date: str, end_date: str,
+                           max_cloud_cover: int) -> list:
+        """Search STAC catalogue for items in a given collection."""
+        client = pystac_client.Client.open(self.config.stac_url)
+        search = client.search(
+            collections=[collection],
+            intersects=geojson_geometry,
+            datetime=f"{start_date}/{end_date}",
+            query={"eo:cloud_cover": {"lte": max_cloud_cover}},
+            max_items=500,
+        )
+        items = list(search.items())
+        items.sort(key=lambda x: x.datetime)
+        return items
 
     def _search(self, geojson_geometry: dict, start_date: str, end_date: str,
                 max_cloud_cover: int) -> list:
@@ -290,5 +446,103 @@ class STACReader:
         )
         reflectance = dn_to_reflectance(band_data, baseline)
         reflectance = apply_scl_cloud_mask(reflectance, scl_data)
+
+        return reflectance, geotransform, crs
+
+    def _read_sensor_bands(self, item, binding: SensorPlatformBinding,
+                           geojson_cutline: str, vsi_prefix: str,
+                           target_resolution: int = 10,
+                           band_executor: ThreadPoolExecutor = None):
+        """Read all spectral bands + QA for a generic sensor item."""
+        cfg = self.config
+
+        band_tasks = []
+        for asset_key in binding.band_asset_keys:
+            asset = item.assets.get(asset_key)
+            if asset is None:
+                raise KeyError(f"Asset '{asset_key}' not found in item {item.id}")
+            band_tasks.append((asset_key, asset.href, binding.resample_alg))
+
+        qa_asset = item.assets.get(binding.qa_asset_key)
+        if qa_asset is None:
+            raise KeyError(
+                f"QA asset '{binding.qa_asset_key}' not found in item {item.id}"
+            )
+        band_tasks.append((binding.qa_asset_key, qa_asset.href,
+                           binding.qa_resample_alg))
+
+        read_fn = partial(
+            read_and_crop_band,
+            geojson_cutline=geojson_cutline,
+            semaphore=self._semaphore,
+            vsi_prefix=vsi_prefix,
+            transform_href=cfg.transform_href,
+            s3_endpoint=cfg.s3_endpoint,
+            target_resolution=target_resolution,
+        )
+
+        if band_executor is not None:
+            futures = {}
+            for asset_key, href, resample in band_tasks:
+                future = band_executor.submit(
+                    read_fn, href, resample_alg=resample,
+                )
+                futures[future] = asset_key
+            results = {}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+        else:
+            results = {}
+            for asset_key, href, resample in band_tasks:
+                results[asset_key] = read_fn(href, resample_alg=resample)
+
+        # Assemble in band order
+        bands = []
+        geotransform = None
+        crs = None
+        for asset_key in binding.band_asset_keys:
+            data, gt, proj = results[asset_key]
+            bands.append(data)
+            if geotransform is None:
+                geotransform = gt
+                crs = proj
+
+        qa_data, _, _ = results[binding.qa_asset_key]
+        band_data = np.stack(bands, axis=0)
+        return band_data, qa_data, geotransform, crs
+
+    def _process_sensor_item(self, item, sensor_config: SensorConfig,
+                             binding: SensorPlatformBinding,
+                             geojson_cutline: str, vsi_prefix: str,
+                             data_folder: str,
+                             band_executor: ThreadPoolExecutor = None):
+        """Process a single STAC item for a generic sensor."""
+        sensor = sensor_config.name
+        cache_path = get_cache_path(item.id, data_folder, sensor)
+
+        if os.path.exists(cache_path):
+            band_data, qa_data, geotransform, crs = load_from_cache(cache_path)
+        else:
+            band_data, qa_data, geotransform, crs = self._read_sensor_bands(
+                item, binding, geojson_cutline, vsi_prefix,
+                target_resolution=sensor_config.target_resolution,
+                band_executor=band_executor,
+            )
+            save_to_cache(cache_path, band_data, qa_data, geotransform, crs)
+
+        # DN to reflectance
+        metadata = dict(item.properties)
+        metadata["processing_baseline"] = metadata.get(
+            self.config.processing_baseline_property, "05.00"
+        )
+        reflectance = sensor_config.dn_to_reflectance(band_data, metadata)
+
+        # Cloud masking
+        if sensor_config.cloud_mask_fn is not None:
+            cloud_mask = sensor_config.cloud_mask_fn(qa_data)
+            reflectance[:, cloud_mask] = np.nan
+        elif sensor == "sentinel2":
+            # Use existing SCL-based masking for S2
+            reflectance = apply_scl_cloud_mask(reflectance, qa_data)
 
         return reflectance, geotransform, crs
