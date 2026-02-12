@@ -125,6 +125,7 @@ class STACReader:
             data_folder=data_folder,
         )
 
+        failed_items = []
         with ThreadPoolExecutor(max_workers=band_pool_size) as band_executor:
             process_with_bands = partial(process_fn, band_executor=band_executor)
             with ThreadPoolExecutor(max_workers=len(items)) as item_executor:
@@ -140,17 +141,38 @@ class STACReader:
                     unit="item",
                 ):
                     idx = future_to_idx[future]
-                    results[idx] = future.result()
+                    try:
+                        results[idx] = future.result()
+                    except Exception as e:
+                        item_id = items[idx].id
+                        print(f"\nWarning: failed to process {item_id}: {e}")
+                        failed_items.append(idx)
 
-        # Assemble output
+        if failed_items:
+            print(f"Skipped {len(failed_items)}/{len(items)} items due to errors")
+
+        # Assemble output (skip failed items)
         s2_reflectances = []
+        valid_indices = []
         geotransform = None
         crs = None
-        for refl, gt, proj in results:
+        for i, result_item in enumerate(results):
+            if result_item is None:
+                continue
+            refl, gt, proj = result_item
             s2_reflectances.append(refl)
+            valid_indices.append(i)
             if geotransform is None:
                 geotransform = gt
                 crs = proj
+
+        if not s2_reflectances:
+            raise RuntimeError(
+                f"All {len(items)} S2 items failed to download."
+            )
+
+        s2_angles = s2_angles[:, valid_indices]
+        doys = doys[valid_indices]
 
         s2_refs = np.array(s2_reflectances, dtype=np.float32)
         s2_uncs = np.abs(s2_refs) * 0.1
@@ -273,6 +295,7 @@ class STACReader:
             data_folder=data_folder,
         )
 
+        failed_items = []
         with ThreadPoolExecutor(max_workers=band_pool_size) as band_executor:
             process_with_bands = partial(process_fn, band_executor=band_executor)
             with ThreadPoolExecutor(max_workers=len(items)) as item_executor:
@@ -288,17 +311,39 @@ class STACReader:
                     unit="item",
                 ):
                     idx = future_to_idx[future]
-                    results[idx] = future.result()
+                    try:
+                        results[idx] = future.result()
+                    except Exception as e:
+                        item_id = items[idx].id
+                        print(f"\nWarning: failed to process {item_id}: {e}")
+                        failed_items.append(idx)
 
-        # Assemble output
+        if failed_items:
+            print(f"Skipped {len(failed_items)}/{len(items)} items due to errors")
+
+        # Assemble output (skip failed items)
         reflectances = []
+        valid_indices = []
         geotransform = None
         crs = None
-        for refl, gt, proj in results:
+        for i, result_item in enumerate(results):
+            if result_item is None:
+                continue
+            refl, gt, proj = result_item
             reflectances.append(refl)
+            valid_indices.append(i)
             if geotransform is None:
                 geotransform = gt
                 crs = proj
+
+        if not reflectances:
+            raise RuntimeError(
+                f"All {len(items)} {sensor} items failed to download."
+            )
+
+        # Filter angles/doys to match successful items
+        angles = angles[:, valid_indices]
+        doys = doys[valid_indices]
 
         refs = np.array(reflectances, dtype=np.float32)
         uncs = sensor_config.uncertainty_fn(refs)
