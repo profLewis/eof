@@ -31,3 +31,6 @@ dev = ["pytest", "pytest-cov", "ruff"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+eof = ["test_data/*.geojson"]

@@ -13,6 +13,8 @@ Usage:
     result.reflectance  # (N, 10, H, W) float32
 """
 
+from pathlib import Path as _Path
+
 from eof._types import S2Result, BAND_NAMES
 from eof._credentials import (
     load_config, save_config, get_cdse_credentials,
@@ -21,6 +23,10 @@ from eof._credentials import (
     get_data_source_preference, create_default_config,
     CONFIG_FILE,
 )
+
+# Bundled test data
+TEST_DATA_DIR = _Path(__file__).parent / "test_data"
+TEST_GEOJSON = str(TEST_DATA_DIR / "SF_field.geojson")
 
 
 def get_s2_data(start_date, end_date, geojson_path,

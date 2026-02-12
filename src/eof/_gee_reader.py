@@ -5,16 +5,11 @@ from the unified STAC reader. The ee module is imported lazily.
 """
 
 import os
-import json
 import tempfile
 import datetime
 import numpy as np
 from osgeo import gdal
-from functools import partial
-from shapely.geometry import shape
-import shapely
 import mgrs
-from concurrent.futures import ThreadPoolExecutor
 
 from eof._types import S2Result
 from eof._geojson import load_geojson
@@ -138,34 +133,39 @@ class GEEReader:
                 with open(filename, 'wb') as out_file:
                     shutil.copyfileobj(r.raw, out_file)
 
-        # Read and process downloaded files
-        geojson_str = shapely.to_geojson(geometry)
+        # Read and process downloaded files — read as int16, convert client-side
         s2_reflectances = []
+        geotransform = None
+        crs = None
         for filename in filenames:
             g = gdal.Warp(
                 '', filename,
                 format='MEM',
-                cutlineDSName=geojson_str,
+                cutlineDSName=geojson_path,
                 cropToCutline=True,
-                dstNodata=np.nan,
-                outputType=gdal.GDT_Float32,
+                dstNodata=0,
+                outputType=gdal.GDT_Int16,
             )
             if g is None:
                 raise IOError(f"Error reading file: {filename}")
-            data = g.ReadAsArray()
-            cloud = data[-2]
-            cloud_mask = (cloud < 70) | (data[0] > 3000) | (data[-1] > 100)
-            data = np.where(cloud_mask, np.nan, data[:-4] / 10000.0)
-            s2_reflectances.append(data)
+            data = g.ReadAsArray()  # int16: (14, H, W)
+            if geotransform is None:
+                geotransform = g.GetGeoTransform()
+                crs = g.GetProjection()
+            g = None
+
+            # Cloud masking on int data
+            # bands: B2-B12(10), probability(10), cs(11), cs_cdf(12), B10(13)
+            cs_cdf = data[12]   # cloud score CDF (0-100 scaled)
+            cloud_mask = (cs_cdf < 70) | (data[0] > 3000) | (data[13] > 100)
+
+            # Convert spectral bands (first 10) to float reflectance
+            spectral = data[:10].astype(np.float32) / 10000.0
+            spectral[:, cloud_mask] = np.nan
+            s2_reflectances.append(spectral)
 
         s2_refs = np.array(s2_reflectances, dtype=np.float32)
         s2_uncs = np.abs(s2_refs) * 0.1
-
-        # Get geotransform and CRS from first file
-        g = gdal.Open(filenames[0])
-        geotransform = g.GetGeoTransform()
-        crs = g.GetProjection()
-        g = None
 
         mask = np.all(np.isnan(s2_refs), axis=(0, 1))
 
