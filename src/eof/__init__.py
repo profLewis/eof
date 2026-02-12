@@ -239,8 +239,17 @@ def _select_sensor_platform(sensor, geojson_path=None):
     available_platforms = get_platforms_for_sensor(sensor)
     available_sources = get_available_sources()
 
-    # Prefer STAC sources (faster) over GEE
-    stac_priority = ["aws", "planetary", "cdse", "earthdata"]
+    # Sensor-specific priority:
+    # - S2: AWS is free and fast, prefer it
+    # - Landsat on AWS is requester-pays, prefer Planetary/Earthdata
+    # - MODIS/VIIRS: Planetary or Earthdata (not on AWS)
+    if sensor == "sentinel2":
+        stac_priority = ["aws", "planetary", "cdse", "earthdata"]
+    elif sensor == "landsat":
+        stac_priority = ["planetary", "earthdata", "aws", "cdse"]
+    else:
+        stac_priority = ["planetary", "earthdata", "cdse", "aws"]
+
     for platform in stac_priority:
         if platform in available_platforms and platform in available_sources:
             return platform
@@ -249,9 +258,9 @@ def _select_sensor_platform(sensor, geojson_path=None):
     if "gee" in available_platforms and "gee" in available_sources:
         return "gee"
 
-    # Last resort: try AWS (no auth needed)
-    if "aws" in available_platforms:
-        return "aws"
+    # Last resort: try first available platform
+    if available_platforms:
+        return available_platforms[0]
 
     raise RuntimeError(
         f"No available platform for sensor '{sensor}'. "

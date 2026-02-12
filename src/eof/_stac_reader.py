@@ -57,7 +57,7 @@ class STACReader:
         cfg = self.config
 
         # Configure GDAL
-        overrides = cfg.configure_gdal()
+        overrides = cfg.configure_gdal(sensor="sentinel2")
         vsi_prefix = overrides.get("vsi_prefix", cfg.vsi_prefix)
 
         # Set up data folder
@@ -189,8 +189,8 @@ class STACReader:
         cfg = self.config
         sensor = sensor_config.name
 
-        # Configure GDAL
-        overrides = cfg.configure_gdal()
+        # Configure GDAL (pass sensor for source-specific setup, e.g. AWS requester-pays)
+        overrides = cfg.configure_gdal(sensor=sensor)
         vsi_prefix = overrides.get("vsi_prefix", cfg.vsi_prefix)
 
         # Set up data folder
@@ -203,11 +203,26 @@ class STACReader:
         geometry = load_geojson(geojson_path)
         geojson_dict = json.loads(shapely.to_geojson(geometry))
 
-        # STAC search
+        # STAC search — some sensors (MODIS, VIIRS, OLCI) don't have eo:cloud_cover
+        has_cloud_cover = sensor in ("sentinel2", "landsat")
         items = self._search_collection(
             binding.collection, geojson_dict, start_date, end_date,
-            max_cloud_cover,
+            max_cloud_cover, extra_query=binding.extra_query or None,
+            has_cloud_cover=has_cloud_cover,
         )
+
+        # Filter out items that don't have the required band assets
+        # (e.g. Landsat 7 in a Landsat 8/9 query)
+        if items:
+            filtered = []
+            for item in items:
+                if all(k in item.assets for k in binding.band_asset_keys):
+                    filtered.append(item)
+            if len(filtered) < len(items):
+                print(f"Filtered {len(items) - len(filtered)} items missing "
+                      f"required bands")
+            items = filtered
+
         print(f"STAC search ({cfg.name}/{sensor}): {len(items)} items found")
 
         if not items:
@@ -216,8 +231,9 @@ class STACReader:
                 f"field and date range ({start_date} to {end_date})."
             )
 
-        # Sort by datetime
-        items.sort(key=lambda x: x.datetime)
+        # Sort by datetime (some items use start_datetime instead)
+        items.sort(key=lambda x: x.datetime or x.properties.get(
+            "start_datetime", "9999"))
 
         # Extract angles and DOYs
         szas, vzas, raas, doys = [], [], [], []
@@ -226,7 +242,14 @@ class STACReader:
             szas.append(sza)
             vzas.append(vza)
             raas.append(raa)
-            doys.append(item.datetime.timetuple().tm_yday)
+            dt = item.datetime
+            if dt is None:
+                from datetime import datetime
+                dt = datetime.fromisoformat(
+                    item.properties.get("start_datetime", "2000-01-01T00:00:00Z")
+                    .replace("Z", "+00:00")
+                )
+            doys.append(dt.timetuple().tm_yday)
 
         angles = np.array([szas, vzas, raas], dtype=np.float64)
         doys = np.array(doys, dtype=np.int64)
@@ -312,18 +335,29 @@ class STACReader:
 
     def _search_collection(self, collection: str, geojson_geometry: dict,
                            start_date: str, end_date: str,
-                           max_cloud_cover: int) -> list:
+                           max_cloud_cover: int,
+                           extra_query: dict = None,
+                           has_cloud_cover: bool = True) -> list:
         """Search STAC catalogue for items in a given collection."""
+        query = {}
+        if has_cloud_cover:
+            query["eo:cloud_cover"] = {"lte": max_cloud_cover}
+        if extra_query:
+            query.update(extra_query)
         client = pystac_client.Client.open(self.config.stac_url)
-        search = client.search(
+        search_kwargs = dict(
             collections=[collection],
             intersects=geojson_geometry,
             datetime=f"{start_date}/{end_date}",
-            query={"eo:cloud_cover": {"lte": max_cloud_cover}},
             max_items=500,
         )
+        if query:
+            search_kwargs["query"] = query
+        search = client.search(**search_kwargs)
         items = list(search.items())
-        items.sort(key=lambda x: x.datetime)
+        # Some items (e.g. MODIS) use start_datetime instead of datetime
+        items.sort(key=lambda x: x.datetime or x.properties.get(
+            "start_datetime", "9999"))
         return items
 
     def _search(self, geojson_geometry: dict, start_date: str, end_date: str,
@@ -338,7 +372,8 @@ class STACReader:
             max_items=500,
         )
         items = list(search.items())
-        items.sort(key=lambda x: x.datetime)
+        items.sort(key=lambda x: x.datetime or x.properties.get(
+            "start_datetime", "9999"))
         return items
 
     def _filter_mgrs(self, items: list, centroid_lon: float,

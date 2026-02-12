@@ -26,8 +26,44 @@ class SourceConfig:
 # GDAL configuration functions
 # ---------------------------------------------------------------------------
 
-def _configure_gdal_for_cdse():
+# Keys that vary between sources and must be cleared before each configure
+_SOURCE_SPECIFIC_GDAL_KEYS = [
+    "AWS_NO_SIGN_REQUEST",
+    "AWS_REQUEST_PAYER",
+    "AWS_S3_ENDPOINT",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_VIRTUAL_HOSTING",
+    "AWS_HTTPS",
+    "GDAL_HTTP_HEADERS",
+    "GDAL_HTTP_COOKIEFILE",
+    "GDAL_HTTP_COOKIEJAR",
+]
+
+
+def _reset_gdal_source_config():
+    """Clear source-specific GDAL options to prevent leakage between sources."""
+    for key in _SOURCE_SPECIFIC_GDAL_KEYS:
+        gdal.SetConfigOption(key, None)
+
+
+def _configure_gdal_common():
+    """Set GDAL options common to all sources."""
+    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.TIF,.jp2,.xml,.hdf,.h5")
+    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
+    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "2")
+    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
+    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
+    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
+    gdal.SetConfigOption("VSI_CACHE", "TRUE")
+    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
+
+
+def _configure_gdal_for_cdse(**kwargs):
     """Configure GDAL for CDSE S3 or token access. Returns runtime overrides."""
+    _reset_gdal_source_config()
+
     from eof._credentials import get_cdse_credentials
 
     creds = get_cdse_credentials()
@@ -70,46 +106,39 @@ def _configure_gdal_for_cdse():
         gdal.SetConfigOption("GDAL_HTTP_HEADERS", f"Authorization: Bearer {token}")
         overrides["vsi_prefix"] = "/vsicurl"
 
-    # Common optimizations
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.jp2,.xml")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
+    _configure_gdal_common()
     gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "5")
-    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
-    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
-    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
-    gdal.SetConfigOption("VSI_CACHE", "TRUE")
-    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
-
     return overrides
 
 
-def _configure_gdal_for_aws():
-    """Configure GDAL for AWS public S3 access."""
-    gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.xml")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
-    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "2")
-    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
-    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
-    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
-    gdal.SetConfigOption("VSI_CACHE", "TRUE")
-    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
-    return {}
+def _configure_gdal_for_aws(**kwargs):
+    """Configure GDAL for AWS S3 access.
+
+    Sentinel-2 on AWS is public (no auth needed).
+    Landsat on AWS is requester-pays (requires AWS credentials).
+    """
+    _reset_gdal_source_config()
+
+    sensor = kwargs.get("sensor", "sentinel2")
+
+    overrides = {}
+
+    if sensor == "landsat":
+        # USGS Landsat bucket is requester-pays — needs AWS credentials + /vsis3
+        gdal.SetConfigOption("AWS_REQUEST_PAYER", "requester")
+        overrides["vsi_prefix"] = "/vsis3"
+    else:
+        # Sentinel-2 on AWS is public
+        gdal.SetConfigOption("AWS_NO_SIGN_REQUEST", "YES")
+
+    _configure_gdal_common()
+    return overrides
 
 
-def _configure_gdal_for_planetary():
+def _configure_gdal_for_planetary(**kwargs):
     """Configure GDAL for Planetary Computer signed URL access."""
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.xml")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
-    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "2")
-    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
-    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
-    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
-    gdal.SetConfigOption("VSI_CACHE", "TRUE")
-    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
+    _reset_gdal_source_config()
+    _configure_gdal_common()
     return {}
 
 
@@ -167,7 +196,7 @@ PLANETARY_CONFIG = SourceConfig(
     transform_href=_planetary_sign_href,
 )
 
-def _configure_gdal_for_earthdata():
+def _configure_gdal_for_earthdata(**kwargs):
     """Configure GDAL for NASA Earthdata access via bearer token or .netrc.
 
     Supports:
@@ -178,6 +207,8 @@ def _configure_gdal_for_earthdata():
 
     Returns runtime overrides dict.
     """
+    _reset_gdal_source_config()
+
     import os
 
     overrides = {}
@@ -219,17 +250,8 @@ def _configure_gdal_for_earthdata():
         gdal.SetConfigOption("GDAL_HTTP_COOKIEFILE", cookie_file)
         gdal.SetConfigOption("GDAL_HTTP_COOKIEJAR", cookie_file)
 
-    # Common optimizations
-    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.TIF,.hdf,.h5")
-    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
+    _configure_gdal_common()
     gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "5")
-    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
-    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
-    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
-    gdal.SetConfigOption("VSI_CACHE", "TRUE")
-    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
-
     return overrides
 
 

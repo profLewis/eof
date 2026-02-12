@@ -20,13 +20,15 @@ All data is resampled to a common **10m grid** aligned with Sentinel-2, with **f
 
 ## Data Platforms
 
-| Platform | `source=` | Auth Required | Speed |
-|----------|-----------|---------------|-------|
-| [AWS Earth Search](https://earth-search.aws.element84.com/v1) | `"aws"` | None | Fast |
-| [CDSE](https://dataspace.copernicus.eu) | `"cdse"` | [S3 keys](https://eodata.dataspace.copernicus.eu) or [login](https://identity.dataspace.copernicus.eu) | Moderate |
-| [Planetary Computer](https://planetarycomputer.microsoft.com/) | `"planetary"` | Auto ([pip install planetary-computer](https://pypi.org/project/planetary-computer/)) | Fast |
-| [NASA Earthdata](https://www.earthdata.nasa.gov/) | `"earthdata"` | [Earthdata Login](https://urs.earthdata.nasa.gov/) | Fast |
-| [Google Earth Engine](https://earthengine.google.com/) | `"gee"` | [GEE account](https://signup.earthengine.google.com/) | Fast |
+| Platform | `source=` | Auth Required | Cost | Speed |
+|----------|-----------|---------------|------|-------|
+| [AWS Earth Search](https://earth-search.aws.element84.com/v1) | `"aws"` | None (S2) / AWS credentials (Landsat) | Free (S2) / Requester-pays (Landsat) | Fast |
+| [CDSE](https://dataspace.copernicus.eu) | `"cdse"` | [S3 keys](https://eodata.dataspace.copernicus.eu) or [login](https://identity.dataspace.copernicus.eu) | Free | Moderate |
+| [Planetary Computer](https://planetarycomputer.microsoft.com/) | `"planetary"` | Auto ([pip install planetary-computer](https://pypi.org/project/planetary-computer/)) | Free | Fast |
+| [NASA Earthdata](https://www.earthdata.nasa.gov/) | `"earthdata"` | [Earthdata Login](https://urs.earthdata.nasa.gov/) | Free | Fast |
+| [Google Earth Engine](https://earthengine.google.com/) | `"gee"` | [GEE account](https://signup.earthengine.google.com/) | Free (non-commercial) | Fast |
+
+**Note on AWS Landsat**: The USGS Landsat bucket on AWS is [requester-pays](https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html), meaning your AWS account is billed for data transfer. Sentinel-2 on AWS is free and requires no credentials. For free Landsat access, use Planetary Computer, Earthdata, or GEE instead.
 
 ## Installation
 
