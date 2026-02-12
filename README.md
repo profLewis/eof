@@ -151,10 +151,6 @@ Fetch multiple sensors concurrently. Returns `dict[str, EOResult]`.
 
 Race all available platforms, return result from fastest.
 
-### `eof.get_s2_official_data(start_date, end_date, geojson_path, S2_data_folder='./', source='auto')`
-
-Backward-compatible wrapper returning a 7-tuple.
-
 ### Utility Functions
 
 - `eof.get_available_sources()` -- list platforms with working credentials

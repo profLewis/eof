@@ -24,11 +24,6 @@ class S2Result:
     geotransform: tuple         # 6-tuple GDAL geotransform
     crs: str                    # WKT projection string
 
-    def to_tuple(self):
-        """Unpack to the 7-tuple expected by ARC's legacy interface."""
-        return (self.reflectance, self.uncertainty, self.angles,
-                self.doys, self.mask, self.geotransform, self.crs)
-
 
 @dataclass(frozen=True)
 class EOResult:
@@ -52,15 +47,3 @@ class EOResult:
     bandpass: dict = None         # {'wavelength_nm': (N,), 'response': (B,N),
                                   #  'band_names': tuple, 'center_wavelength_nm': (B,),
                                   #  'fwhm_nm': (B,)} — spectral response functions
-
-    def to_s2result(self):
-        """Convert to S2Result (drops sensor-specific metadata)."""
-        return S2Result(
-            reflectance=self.reflectance,
-            uncertainty=self.uncertainty,
-            angles=self.angles,
-            doys=self.doys,
-            mask=self.mask,
-            geotransform=self.geotransform,
-            crs=self.crs,
-        )

@@ -69,18 +69,6 @@ def get_s2_data(start_date, end_date, geojson_path,
                         data_folder, max_cloud_cover)
 
 
-def get_s2_official_data(start_date, end_date, geojson_path,
-                         S2_data_folder='./', source='auto'):
-    """
-    Backward-compatible wrapper matching ARC's legacy interface.
-
-    Returns:
-        tuple: (s2_refs, s2_uncs, s2_angles, doys, mask, geotransform, crs)
-    """
-    result = get_s2_data(start_date, end_date, geojson_path,
-                         data_folder=S2_data_folder, source=source)
-    return result.to_tuple()
-
 
 # -----------------------------------------------------------------------
 # Multi-sensor API (new)
