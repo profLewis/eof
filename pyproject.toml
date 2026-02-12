@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eof"
+version = "0.1.0"
+description = "EO Fetch: Download and cache Sentinel-2 L2A data from multiple sources"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.9"
+authors = [
+    {name = "Feng Yin", email = "ucfafyi@ucl.ac.uk"},
+    {name = "P. Lewis"},
+]
+dependencies = [
+    "numpy",
+    "GDAL",
+    "pystac-client",
+    "shapely",
+    "mgrs",
+    "requests",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+planetary = ["planetary-computer"]
+gee = ["earthengine-api"]
+all = ["planetary-computer", "earthengine-api"]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
