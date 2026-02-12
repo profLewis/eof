@@ -23,15 +23,19 @@ from pathlib import Path as _Path
 from eof._types import S2Result, EOResult, BAND_NAMES
 from eof._credentials import (
     load_config, save_config, get_cdse_credentials,
+    get_earthdata_credentials,
     get_available_sources, select_data_source,
-    probe_download_speed, print_config_status,
+    probe_download_speed, benchmark_sources,
+    print_config_status,
     get_data_source_preference, create_default_config,
     CONFIG_FILE,
 )
 from eof._platform_bindings import (
     SUPPORTED_SENSORS as SENSORS,
     SENSOR_PLATFORMS,
+    get_dataset_info,
 )
+from eof._bandpass import load_srf, get_srf_summary
 
 # Bundled test data
 TEST_DATA_DIR = _Path(__file__).parent / "test_data"
@@ -126,6 +130,19 @@ def get_eo_data(sensor, start_date, end_date, geojson_path,
         from eof._stac_reader import STACReader
         from eof._source_configs import get_config
         binding = get_binding(sensor, source)
+
+        # Check if this is an HDF-based Earthdata product
+        dataset_info = get_dataset_info(sensor, source)
+        fmt = dataset_info.get("format", "cog")
+        if source == "earthdata" and fmt in ("hdf4", "hdf5"):
+            from eof._earthdata_hdf_reader import EarthdataHDFReader
+            reader = EarthdataHDFReader(get_config(source))
+            return reader.fetch_sensor(
+                sensor_config, binding,
+                start_date, end_date, geojson_path,
+                data_folder, max_cloud_cover,
+            )
+
         reader = STACReader(get_config(source))
         return reader.fetch_sensor(
             sensor_config, binding,
@@ -216,14 +233,14 @@ def _get_reader(source, geojson_path=None):
     elif source == "gee":
         from eof._gee_reader import GEEReader
         return GEEReader()
-    elif source in ("aws", "cdse", "planetary"):
+    elif source in ("aws", "cdse", "planetary", "earthdata"):
         from eof._stac_reader import STACReader
         from eof._source_configs import get_config
         return STACReader(get_config(source))
     else:
         raise ValueError(
             f"Unknown source '{source}'. "
-            f"Must be 'aws', 'cdse', 'planetary', 'gee', or 'auto'."
+            f"Must be 'aws', 'cdse', 'planetary', 'earthdata', 'gee', or 'auto'."
         )
 
 
@@ -235,7 +252,7 @@ def _select_sensor_platform(sensor, geojson_path=None):
     available_sources = get_available_sources()
 
     # Prefer STAC sources (faster) over GEE
-    stac_priority = ["aws", "planetary", "cdse"]
+    stac_priority = ["aws", "planetary", "cdse", "earthdata"]
     for platform in stac_priority:
         if platform in available_platforms and platform in available_sources:
             return platform

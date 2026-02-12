@@ -1,0 +1,122 @@
+{
+  "_description": "Dataset collection IDs and versions for all sensor x platform combinations. Run scripts/update_dataset_versions.py to check for updates.",
+  "_updated": "2025-01-01",
+
+  "sentinel2": {
+    "aws": {
+      "collection": "sentinel-2-l2a",
+      "version": "1.0",
+      "temporal": "5-day",
+      "notes": "ESA Sentinel-2 L2A via AWS Earth Search"
+    },
+    "cdse": {
+      "collection": "sentinel-2-l2a",
+      "version": "1.0",
+      "temporal": "5-day",
+      "notes": "ESA Sentinel-2 L2A via Copernicus Data Space"
+    },
+    "planetary": {
+      "collection": "sentinel-2-l2a",
+      "version": "1.0",
+      "temporal": "5-day",
+      "notes": "ESA Sentinel-2 L2A via Microsoft Planetary Computer"
+    },
+    "gee": {
+      "collection": "COPERNICUS/S2_SR_HARMONIZED",
+      "version": "harmonized",
+      "temporal": "5-day",
+      "notes": "ESA Sentinel-2 L2A harmonized collection on GEE"
+    },
+    "earthdata": {
+      "collection": "HLSS30_2.0",
+      "version": "2.0",
+      "temporal": "5-day",
+      "format": "cog",
+      "notes": "Harmonized Landsat Sentinel-2 (HLS) S30 product. 30m, BRDF-adjusted."
+    }
+  },
+
+  "landsat": {
+    "aws": {
+      "collection": "landsat-c2-l2",
+      "version": "2.0",
+      "temporal": "16-day",
+      "notes": "USGS Landsat Collection 2 Level 2 via AWS Earth Search"
+    },
+    "planetary": {
+      "collection": "landsat-c2-l2",
+      "version": "2.0",
+      "temporal": "16-day",
+      "notes": "USGS Landsat Collection 2 Level 2 via Planetary Computer"
+    },
+    "gee": {
+      "collection": "LANDSAT/LC09/C02/T1_L2",
+      "version": "C02",
+      "temporal": "16-day",
+      "notes": "USGS Landsat 9 Collection 2 Tier 1 Level 2 on GEE. L8 merged at query time."
+    },
+    "earthdata": {
+      "collection": "HLSL30_2.0",
+      "version": "2.0",
+      "temporal": "16-day",
+      "format": "cog",
+      "notes": "Harmonized Landsat Sentinel-2 (HLS) L30 product. 30m COGs, BRDF-adjusted."
+    }
+  },
+
+  "modis": {
+    "planetary": {
+      "collection": "modis-09A1-061",
+      "version": "061",
+      "temporal": "8-day",
+      "notes": "MODIS MOD09A1 8-day composite. Daily MOD09GA not available on Planetary Computer."
+    },
+    "gee": {
+      "collection": "MODIS/061/MOD09GA",
+      "version": "061",
+      "temporal": "daily",
+      "notes": "MODIS MOD09GA daily surface reflectance on GEE"
+    },
+    "earthdata": {
+      "collection": "MOD09GA_061",
+      "version": "061",
+      "temporal": "daily",
+      "format": "hdf4",
+      "stac_provider": "LPCLOUD",
+      "notes": "MODIS MOD09GA daily surface reflectance. HDF4 files with subdatasets."
+    }
+  },
+
+  "viirs": {
+    "gee": {
+      "collection": "NASA/VIIRS/002/VNP09GA",
+      "version": "002",
+      "temporal": "daily",
+      "notes": "VIIRS VNP09GA daily surface reflectance on GEE"
+    },
+    "earthdata": {
+      "collection": "VNP09GA_002",
+      "version": "002",
+      "temporal": "daily",
+      "format": "hdf5",
+      "stac_provider": "LPCLOUD",
+      "notes": "VIIRS VNP09GA daily surface reflectance. HDF5 files with subdatasets."
+    }
+  },
+
+  "s3olci": {
+    "gee": {
+      "collection": "COPERNICUS/S3/OLCI",
+      "version": "1.0",
+      "temporal": "daily",
+      "notes": "Sentinel-3 OLCI Level 1 TOA radiance on GEE"
+    }
+  },
+
+  "_stac_endpoints": {
+    "aws": "https://earth-search.aws.element84.com/v1",
+    "cdse": "https://stac.dataspace.copernicus.eu/v1",
+    "planetary": "https://planetarycomputer.microsoft.com/api/stac/v1",
+    "earthdata": "https://cmr.earthdata.nasa.gov/stac/LPCLOUD"
+  }
+}

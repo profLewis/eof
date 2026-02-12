@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eof"
 version = "0.1.0"
-description = "EO Fetch: Download and cache Sentinel-2 L2A data from multiple sources"
+description = "EO Fetch: Download and cache multi-sensor Earth Observation data from multiple platforms"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.9"
@@ -33,4 +33,4 @@ dev = ["pytest", "pytest-cov", "ruff"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-eof = ["test_data/*.geojson"]
+eof = ["test_data/*.geojson", "data/*.npz", "data/*.json"]

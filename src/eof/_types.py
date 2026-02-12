@@ -49,6 +49,9 @@ class EOResult:
     band_names: tuple             # e.g. ("B02", "B03", ...) or ("SR_B1", ...)
     native_resolutions: dict      # {resolution_m: [band_indices]}
     footprints: dict              # {resolution_m: np.ndarray} int ID maps (H, W)
+    bandpass: dict = None         # {'wavelength_nm': (N,), 'response': (B,N),
+                                  #  'band_names': tuple, 'center_wavelength_nm': (B,),
+                                  #  'fwhm_nm': (B,)} — spectral response functions
 
     def to_s2result(self):
         """Convert to S2Result (drops sensor-specific metadata)."""

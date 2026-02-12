@@ -1,4 +1,4 @@
-"""Source-specific configuration for STAC-based Sentinel-2 data sources."""
+"""Source-specific configuration for STAC-based EO data sources."""
 
 from dataclasses import dataclass, field
 from typing import Optional, Callable, List
@@ -167,10 +167,90 @@ PLANETARY_CONFIG = SourceConfig(
     transform_href=_planetary_sign_href,
 )
 
+def _configure_gdal_for_earthdata():
+    """Configure GDAL for NASA Earthdata access via bearer token or .netrc.
+
+    Supports:
+    1. Bearer token (from env var EARTHDATA_TOKEN or obtained via EDL API)
+    2. .netrc file (machine urs.earthdata.nasa.gov)
+    3. Credentials from env vars EARTHDATA_USERNAME + EARTHDATA_PASSWORD
+    4. Credentials from ~/.eof/config.json
+
+    Returns runtime overrides dict.
+    """
+    import os
+
+    overrides = {}
+
+    # Try bearer token from env first
+    token = os.environ.get("EARTHDATA_TOKEN", "")
+
+    if not token:
+        # Try to get credentials and fetch a token
+        from eof._credentials import get_earthdata_credentials
+        creds = get_earthdata_credentials()
+        username = creds.get("username", "")
+        password = creds.get("password", "")
+
+        if username and password:
+            import base64
+            import requests
+            auth_str = base64.b64encode(
+                f"{username}:{password}".encode()
+            ).decode()
+            try:
+                resp = requests.post(
+                    "https://urs.earthdata.nasa.gov/api/users/find_or_create_token",
+                    headers={"Authorization": f"Basic {auth_str}"},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                token = resp.json().get("access_token", "")
+            except Exception:
+                # Fall back to cookie-based auth via .netrc
+                pass
+
+    if token:
+        gdal.SetConfigOption("GDAL_HTTP_HEADERS",
+                             f"Authorization: Bearer {token}")
+    else:
+        # Rely on .netrc for cookie-based auth
+        cookie_file = os.path.expanduser("~/.eof/earthdata_cookies.txt")
+        gdal.SetConfigOption("GDAL_HTTP_COOKIEFILE", cookie_file)
+        gdal.SetConfigOption("GDAL_HTTP_COOKIEJAR", cookie_file)
+
+    # Common optimizations
+    gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+    gdal.SetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.TIF,.hdf,.h5")
+    gdal.SetConfigOption("GDAL_HTTP_MAX_RETRY", "5")
+    gdal.SetConfigOption("GDAL_HTTP_RETRY_DELAY", "5")
+    gdal.SetConfigOption("GDAL_CACHEMAX", "256")
+    gdal.SetConfigOption("CPL_VSIL_CURL_CACHE_SIZE", "134217728")
+    gdal.SetConfigOption("GDAL_NUM_THREADS", "ALL_CPUS")
+    gdal.SetConfigOption("VSI_CACHE", "TRUE")
+    gdal.SetConfigOption("VSI_CACHE_SIZE", "134217728")
+
+    return overrides
+
+
+EARTHDATA_CONFIG = SourceConfig(
+    name="earthdata",
+    stac_url="https://cmr.earthdata.nasa.gov/stac/LPCLOUD",
+    collection="HLSL30_2.0",  # default; overridden per sensor by bindings
+    band_assets=[],  # overridden per sensor
+    scl_asset_key="Fmask",
+    max_concurrent_reads=4,
+    processing_baseline_property="",
+    mgrs_property_keys=[],
+    configure_gdal=_configure_gdal_for_earthdata,
+)
+
+
 SOURCE_CONFIGS = {
     "cdse": CDSE_CONFIG,
     "aws": AWS_CONFIG,
     "planetary": PLANETARY_CONFIG,
+    "earthdata": EARTHDATA_CONFIG,
 }
 
 

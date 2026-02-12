@@ -27,6 +27,7 @@ from eof._cache import get_cache_path, save_to_cache, load_from_cache
 from eof._scl import apply_scl_cloud_mask, dn_to_reflectance
 from eof._gdal_io import read_and_crop_band
 from eof._footprints import compute_all_footprints
+from eof._bandpass import load_srf
 
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
@@ -280,12 +281,15 @@ class STACReader:
         uncs = sensor_config.uncertainty_fn(refs)
         mask = np.all(np.isnan(refs), axis=(0, 1))
 
-        # Compute footprint ID maps
+        # Compute footprint ID maps (with edge exclusion using mask)
         shape_hw = refs.shape[2:]
         footprints = compute_all_footprints(
             geotransform, shape_hw, sensor_config.resolution_groups,
-            sensor_config.target_resolution,
+            sensor_config.target_resolution, mask=mask,
         )
+
+        # Load bandpass / spectral response functions
+        bandpass = load_srf(sensor)
 
         return EOResult(
             reflectance=refs,
@@ -299,6 +303,7 @@ class STACReader:
             band_names=sensor_config.band_names,
             native_resolutions=sensor_config.resolution_groups,
             footprints=footprints,
+            bandpass=bandpass,
         )
 
     # -------------------------------------------------------------------

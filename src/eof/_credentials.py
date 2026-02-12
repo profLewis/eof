@@ -23,10 +23,10 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 # Legacy ARC config for migration
 _OLD_ARC_CONFIG = Path.home() / ".arc" / "config.json"
 
-ALL_SOURCES = ["aws", "cdse", "planetary", "gee"]
+ALL_SOURCES = ["aws", "cdse", "planetary", "gee", "earthdata"]
 
 DEFAULT_CONFIG = {
-    "data_source_preference": ["aws", "cdse", "planetary", "gee"],
+    "data_source_preference": ["aws", "cdse", "planetary", "earthdata", "gee"],
     "cdse": {
         "s3_access_key": "",
         "s3_secret_key": "",
@@ -41,6 +41,13 @@ DEFAULT_CONFIG = {
     },
     "planetary": {
         "note": "Planetary Computer auth is handled by the planetary-computer package."
+    },
+    "earthdata": {
+        "username": "",
+        "password": "",
+        "note": "NASA Earthdata Login. Register at https://urs.earthdata.nasa.gov/. "
+                "Or set EARTHDATA_USERNAME + EARTHDATA_PASSWORD env vars. "
+                "Or use ~/.netrc with machine urs.earthdata.nasa.gov.",
     },
 }
 
@@ -101,6 +108,45 @@ def get_cdse_credentials() -> dict:
     }
 
 
+def get_earthdata_credentials() -> dict:
+    """
+    Get NASA Earthdata Login credentials.
+
+    Checks (in order):
+    1. Environment variables: EARTHDATA_USERNAME, EARTHDATA_PASSWORD
+    2. Config file (~/.eof/config.json)
+    3. ~/.netrc file (machine urs.earthdata.nasa.gov)
+
+    Returns:
+        dict with keys: 'username', 'password'
+    """
+    # Env vars
+    username = os.environ.get("EARTHDATA_USERNAME", "")
+    password = os.environ.get("EARTHDATA_PASSWORD", "")
+    if username and password:
+        return {"username": username, "password": password}
+
+    # Config file
+    config = load_config()
+    ed = config.get("earthdata", {})
+    username = ed.get("username", "")
+    password = ed.get("password", "")
+    if username and password:
+        return {"username": username, "password": password}
+
+    # .netrc
+    try:
+        import netrc
+        nrc = netrc.netrc()
+        auth = nrc.authenticators("urs.earthdata.nasa.gov")
+        if auth:
+            return {"username": auth[0], "password": auth[2]}
+    except Exception:
+        pass
+
+    return {"username": "", "password": ""}
+
+
 def get_data_source_preference() -> list:
     """Return the ordered list of preferred data sources from config."""
     config = load_config()
@@ -130,6 +176,13 @@ def get_available_sources() -> list:
     if (creds["s3_access_key"] and creds["s3_secret_key"]) or \
        (creds["username"] and creds["password"]):
         available.append("cdse")
+
+    # Earthdata: available if credentials configured (env, config, or .netrc)
+    ed_creds = get_earthdata_credentials()
+    if ed_creds["username"] and ed_creds["password"]:
+        available.append("earthdata")
+    elif os.environ.get("EARTHDATA_TOKEN"):
+        available.append("earthdata")
 
     # GEE: available if ee.Initialize() works
     try:
@@ -317,6 +370,150 @@ def select_data_source(geojson_path: str = None, probe: bool = False) -> str:
     return available[0]
 
 
+def benchmark_sources(geojson_path: str = None, sensors: list = None,
+                      timeout: float = 30.0) -> dict:
+    """
+    Time a single-band download from every available sensor x platform combination.
+
+    Args:
+        geojson_path: Field boundary GeoJSON. Defaults to eof.TEST_GEOJSON.
+        sensors: Sensors to test. None = all available.
+        timeout: Max seconds per probe.
+
+    Returns:
+        dict: {(sensor, platform): seconds} for successful probes.
+        Also prints a formatted table of results.
+    """
+    from eof._platform_bindings import BINDINGS, get_dataset_info
+
+    if geojson_path is None:
+        from pathlib import Path
+        geojson_path = str(Path(__file__).parent / "test_data" / "SF_field.geojson")
+
+    available = get_available_sources()
+
+    # Build list of (sensor, platform) combos to test
+    combos = []
+    for (sensor, platform) in BINDINGS:
+        if sensors and sensor not in sensors:
+            continue
+        if platform not in available:
+            continue
+        if platform == "gee":
+            continue  # GEE timing is server-dominated, not meaningful
+        info = get_dataset_info(sensor, platform)
+        fmt = info.get("format", "cog")
+        if fmt in ("hdf4", "hdf5"):
+            continue  # Skip HDF downloads for benchmarking
+        combos.append((sensor, platform))
+
+    results = {}
+
+    print(f"\nBenchmarking {len(combos)} sensor x platform combinations...")
+    print(f"{'Sensor':<12} {'Platform':<12} {'Time (s)':<10} {'Status'}")
+    print("-" * 50)
+
+    for sensor, platform in combos:
+        try:
+            elapsed = _probe_sensor_source(sensor, platform, geojson_path, timeout)
+            results[(sensor, platform)] = elapsed
+            print(f"{sensor:<12} {platform:<12} {elapsed:<10.1f} OK")
+        except Exception as e:
+            print(f"{sensor:<12} {platform:<12} {'--':<10} FAILED ({e})")
+
+    if results:
+        fastest = min(results, key=results.get)
+        print(f"\nFastest: {fastest[0]}/{fastest[1]} ({results[fastest]:.1f}s)")
+
+    return results
+
+
+def _probe_sensor_source(sensor: str, platform: str,
+                         geojson_path: str, timeout: float) -> float:
+    """Probe a single sensor x platform combo by reading one band."""
+    from osgeo import gdal
+    import pystac_client
+    from eof._platform_bindings import get_binding
+    from eof._source_configs import get_config
+
+    gdal.PushErrorHandler('CPLQuietErrorHandler')
+
+    binding = get_binding(sensor, platform)
+    cfg = get_config(platform)
+
+    # Configure GDAL
+    overrides = cfg.configure_gdal()
+    vsi_prefix = overrides.get("vsi_prefix", cfg.vsi_prefix)
+
+    # Load geometry for search
+    with open(geojson_path) as f:
+        features = json.load(f)["features"]
+    from shapely.geometry import shape
+    import shapely as _shapely
+    geom = shape(features[0]["geometry"])
+    geojson_dict = json.loads(_shapely.to_geojson(geom))
+
+    # STAC search for one item
+    client = pystac_client.Client.open(cfg.stac_url)
+    search = client.search(
+        collections=[binding.collection],
+        intersects=geojson_dict,
+        max_items=1,
+    )
+    items = list(search.items())
+    if not items:
+        raise RuntimeError("No items found")
+
+    item = items[0]
+
+    # Get the first band's href
+    first_band_key = binding.band_asset_keys[0]
+    asset = item.assets.get(first_band_key)
+    if asset is None:
+        raise KeyError(f"Asset '{first_band_key}' not found")
+
+    href = asset.href
+    if cfg.transform_href:
+        href = cfg.transform_href(href)
+
+    # Build VSI path
+    if vsi_prefix == "/vsis3":
+        if href.startswith("s3://"):
+            vsi_path = f"/vsis3/{href[5:]}"
+        else:
+            if cfg.s3_endpoint:
+                vsi_path = f"/vsis3/{href}"
+            else:
+                vsi_path = f"/vsis3{href}"
+    else:
+        if href.startswith("s3://"):
+            path = href[5:]
+            if cfg.s3_endpoint:
+                vsi_path = f"/vsicurl/https://{cfg.s3_endpoint}/{path}"
+            else:
+                vsi_path = f"/vsicurl/{href}"
+        elif href.startswith("http"):
+            vsi_path = f"/vsicurl/{href}"
+        else:
+            vsi_path = f"{vsi_prefix}/{href}"
+
+    # Time the read
+    t0 = time.time()
+    ds = gdal.Warp(
+        '', vsi_path,
+        format='MEM',
+        cutlineDSName=geojson_path,
+        cropToCutline=True,
+        xRes=10, yRes=10,
+        outputType=gdal.GDT_Int16,
+    )
+    if ds is None:
+        raise IOError(f"GDAL failed to read from {platform}/{sensor}")
+    _ = ds.ReadAsArray()
+    ds = None
+    return time.time() - t0
+
+
 def print_config_status():
     """Print which credentials are configured."""
     creds = get_cdse_credentials()
@@ -344,6 +541,18 @@ def print_config_status():
         print("  Planetary Computer: package installed")
     else:
         print("  Planetary Computer: not installed (pip install planetary-computer)")
+
+    # Earthdata
+    ed_creds = get_earthdata_credentials()
+    if ed_creds["username"] and ed_creds["password"]:
+        if os.environ.get("EARTHDATA_USERNAME"):
+            print("  NASA Earthdata:    configured (env)")
+        else:
+            print("  NASA Earthdata:    configured (config/.netrc)")
+    elif os.environ.get("EARTHDATA_TOKEN"):
+        print("  NASA Earthdata:    configured (token)")
+    else:
+        print("  NASA Earthdata:    not configured (register at urs.earthdata.nasa.gov)")
 
     # GEE
     if "gee" in available:

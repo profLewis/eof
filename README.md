@@ -8,13 +8,15 @@ Download and cache multi-sensor Earth Observation data from multiple platforms.
 
 | Sensor | `sensor=` | Bands | Native Resolution | Platforms |
 |--------|-----------|-------|-------------------|-----------|
-| Sentinel-2 L2A | `"sentinel2"` | 10 (B02-B12) | 10m / 20m | AWS, CDSE, Planetary, GEE |
-| Landsat 8/9 C2 L2 | `"landsat"` | 7 (SR_B1-B7) | 30m | AWS, Planetary, GEE |
-| MODIS MOD09GA | `"modis"` | 7 (bands 1-7) | 250m / 500m | Planetary, GEE |
-| VIIRS VNP09GA | `"viirs"` | 12 (I + M bands) | 500m / 1000m | GEE |
+| Sentinel-2 L2A | `"sentinel2"` | 10 (B02-B12) | 10m / 20m | AWS, CDSE, Planetary, Earthdata, GEE |
+| Landsat 8/9 C2 L2 | `"landsat"` | 7 (SR_B1-B7) | 30m | AWS, Planetary, Earthdata, GEE |
+| MODIS MOD09GA | `"modis"` | 7 (bands 1-7) | 250m / 500m | Planetary*, Earthdata, GEE |
+| VIIRS VNP09GA | `"viirs"` | 12 (I + M bands) | 500m / 1000m | Earthdata, GEE |
 | Sentinel-3 OLCI | `"s3olci"` | 21 (Oa01-Oa21) | 300m | GEE |
 
-All data is resampled to a common **10m grid** aligned with Sentinel-2, with **footprint ID maps** that identify which coarse-resolution pixel each 10m pixel belongs to.
+\* Planetary MODIS is 8-day composite (MOD09A1), not daily. Earthdata and GEE provide daily MOD09GA.
+
+All data is resampled to a common **10m grid** aligned with Sentinel-2, with **footprint ID maps** that identify which coarse-resolution pixel each 10m pixel belongs to. Each result includes **spectral response functions** (bandpass data) for the sensor.
 
 ## Data Platforms
 
@@ -23,6 +25,7 @@ All data is resampled to a common **10m grid** aligned with Sentinel-2, with **f
 | [AWS Earth Search](https://earth-search.aws.element84.com/v1) | `"aws"` | None | Fast |
 | [CDSE](https://dataspace.copernicus.eu) | `"cdse"` | [S3 keys](https://eodata.dataspace.copernicus.eu) or [login](https://identity.dataspace.copernicus.eu) | Moderate |
 | [Planetary Computer](https://planetarycomputer.microsoft.com/) | `"planetary"` | Auto ([pip install planetary-computer](https://pypi.org/project/planetary-computer/)) | Fast |
+| [NASA Earthdata](https://www.earthdata.nasa.gov/) | `"earthdata"` | [Earthdata Login](https://urs.earthdata.nasa.gov/) | Fast |
 | [Google Earth Engine](https://earthengine.google.com/) | `"gee"` | [GEE account](https://signup.earthengine.google.com/) | Fast |
 
 ## Installation
@@ -68,6 +71,7 @@ result = eof.get_eo_data(
 print(result.reflectance.shape)   # (N, 7, H, W) float32
 print(result.band_names)          # ('SR_B1', ..., 'SR_B7')
 print(result.footprints)          # {30: array(H, W, dtype=uint8)}
+print(result.bandpass.keys())     # dict_keys(['wavelength_nm', 'response', ...])
 ```
 
 ### Multiple sensors at once
@@ -93,6 +97,15 @@ result = eof.get_eo_data_fastest(
     end_date='2022-11-30',
     geojson_path=eof.TEST_GEOJSON,
 )
+```
+
+### Benchmark platforms
+
+```python
+# Time all available sensor x platform combinations
+timings = eof.benchmark_sources()
+# Or test specific sensors:
+timings = eof.benchmark_sources(sensors=['sentinel2', 'landsat'])
 ```
 
 ## API Reference
@@ -128,6 +141,7 @@ Fetch data for any sensor. Returns `EOResult`:
 | `band_names` | tuple | Band names in order |
 | `native_resolutions` | dict | {resolution_m: [band_indices]} |
 | `footprints` | dict | {resolution_m: array(H, W)} footprint ID maps |
+| `bandpass` | dict | Spectral response functions (see below) |
 
 ### `eof.get_multi_sensor_data(sensors, start_date, end_date, geojson_path, ...)`
 
@@ -143,17 +157,44 @@ Backward-compatible wrapper returning a 7-tuple.
 
 ### Utility Functions
 
-- `eof.get_available_sources()` — list platforms with working credentials
-- `eof.select_data_source(geojson_path=None, probe=False)` — pick the best S2 source
-- `eof.probe_download_speed(geojson_path, sources=None)` — benchmark each platform
-- `eof.print_config_status()` — show credential status
+- `eof.get_available_sources()` -- list platforms with working credentials
+- `eof.select_data_source(geojson_path=None, probe=False)` -- pick the best S2 source
+- `eof.benchmark_sources(geojson_path=None, sensors=None)` -- time all sensor x platform combos
+- `eof.probe_download_speed(geojson_path, sources=None)` -- benchmark S2 per platform
+- `eof.print_config_status()` -- show credential status
+- `eof.load_srf(sensor, satellite=None)` -- load spectral response functions
+- `eof.get_srf_summary(sensor)` -- quick center wavelength / FWHM lookup
+- `eof.get_dataset_info(sensor, platform)` -- dataset version info
 
 ### Constants
 
-- `eof.SENSORS` — list of supported sensor names
-- `eof.SENSOR_PLATFORMS` — dict mapping sensor → list of available platforms
-- `eof.TEST_GEOJSON` — path to bundled South African wheat field GeoJSON
-- `eof.TEST_DATA_DIR` — directory containing test data
+- `eof.SENSORS` -- list of supported sensor names
+- `eof.SENSOR_PLATFORMS` -- dict mapping sensor -> list of available platforms
+- `eof.TEST_GEOJSON` -- path to bundled South African wheat field GeoJSON
+- `eof.TEST_DATA_DIR` -- directory containing test data
+
+## Spectral Response Functions (Bandpass)
+
+Each `EOResult` includes a `bandpass` dict with the sensor's spectral response functions:
+
+```python
+result = eof.get_eo_data('sentinel2', ...)
+bp = result.bandpass
+print(bp['wavelength_nm'].shape)         # (2251,) — 350..2600 nm at 1nm
+print(bp['response'].shape)              # (10, 2251) — per-band response
+print(bp['center_wavelength_nm'])        # (10,) — center wavelengths
+print(bp['fwhm_nm'])                     # (10,) — full width at half max
+print(bp['band_names'])                  # ('B02', 'B03', ..., 'B12')
+```
+
+You can also load SRF data independently:
+
+```python
+srf = eof.load_srf('landsat', satellite='9')  # full response curves
+summary = eof.get_srf_summary('modis')         # just center + FWHM
+```
+
+The bundled SRF data uses Gaussian approximations from published center wavelengths and FWHM. For higher fidelity, replace with measured SRFs via `scripts/build_srf_data.py`.
 
 ## Footprint ID Maps
 
@@ -166,6 +207,8 @@ print(fp.shape)   # (H, W) — same as reflectance spatial dims
 print(fp.dtype)   # uint8 (auto-selected: uint8/uint16/uint32)
 ```
 
+**Edge exclusion**: Footprints where less than 50% of the coarse pixel falls inside the field boundary are marked invalid (set to the dtype's max value, e.g. 255 for uint8). This prevents edge artifacts in assimilation.
+
 Sensors with multiple native resolutions get multiple footprint maps:
 
 | Sensor | Footprint keys | Example |
@@ -176,7 +219,20 @@ Sensors with multiple native resolutions get multiple footprint maps:
 | VIIRS | `{500, 1000}` | I-bands at 500m, M-bands at 1000m |
 | S3 OLCI | `{300}` | All bands at 300m |
 
-The dtype is automatically selected: `uint8` if <= 255 footprints, `uint16` if <= 65535, else `uint32`.
+The dtype is automatically selected: `uint8` if <= 254 footprints, `uint16` if <= 65534, else `uint32`.
+
+## Dataset Versions
+
+Collection IDs and version numbers for each sensor x platform are stored in
+`src/eof/data/dataset_versions.json`. To check for newer dataset versions:
+
+```bash
+python scripts/update_dataset_versions.py           # report only
+python scripts/update_dataset_versions.py --update   # apply updates
+```
+
+The script queries each STAC endpoint to find available collections and suggests
+updates when newer versions are found.
 
 ## Credential Management
 
@@ -199,6 +255,29 @@ config['cdse']['s3_secret_key'] = 'your-secret'
 eof.save_config(config)
 ```
 
+### NASA Earthdata
+
+Register at [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov/), then:
+
+```bash
+# Option 1: environment variables
+export EARTHDATA_USERNAME="your-username"
+export EARTHDATA_PASSWORD="your-password"
+
+# Option 2: .netrc file
+echo "machine urs.earthdata.nasa.gov login YOUR_USER password YOUR_PASS" >> ~/.netrc
+chmod 600 ~/.netrc
+
+# Option 3: eof config
+python -c "
+import eof
+config = eof.load_config()
+config['earthdata']['username'] = 'your-username'
+config['earthdata']['password'] = 'your-password'
+eof.save_config(config)
+"
+```
+
 ### Google Earth Engine
 
 ```bash
@@ -211,7 +290,7 @@ earthengine authenticate
 pip install planetary-computer
 ```
 
-No further configuration needed — URLs are signed automatically.
+No further configuration needed -- URLs are signed automatically.
 
 ## Caching
 
