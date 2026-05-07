@@ -67,6 +67,7 @@ class STACReader:
         os.makedirs(data_folder, exist_ok=True)
 
         # Load geometry
+
         geometry = load_geojson(geojson_path)
         centroid = geometry.centroid
         geojson_dict = json.loads(shapely.to_geojson(geometry))
@@ -120,7 +121,7 @@ class STACReader:
         band_pool_size = cfg.max_concurrent_reads + 4
         process_fn = partial(
             self._process_item,
-            geojson_cutline=geojson_path,
+            geojson_cutline=geometry,
             vsi_prefix=vsi_prefix,
             data_folder=data_folder,
         )

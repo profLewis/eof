@@ -59,6 +59,7 @@ def read_and_crop_band(href: str, geojson_cutline: str, semaphore: threading.Sem
             '', vsi_path,
             format='MEM',
             cutlineDSName=geojson_cutline,
+            cutlineSRS="EPSG:4326",   # tell GDAL the CRS
             cropToCutline=True,
             xRes=target_resolution,
             yRes=target_resolution,
